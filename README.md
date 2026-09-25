@@ -1,104 +1,104 @@
 # Second Brain Bot
 
-Telegram (ve WhatsApp) üzerinden gönderilen linkleri ve medyayı analiz edip aranabilir bir kişisel bilgi tabanına dönüştüren bir bot.
+A bot that turns links and media sent via Telegram (and WhatsApp) into a searchable personal knowledge base.
 
-Instagram, YouTube, TikTok, LinkedIn, Twitter/X ve genel web sayfalarından gelen içerikleri indirir, Gemini ile analiz eder, vektör olarak indeksler ve kullanıcının sorularını kendi kaydettiği içerikler üzerinden (RAG), kullanıcının tercih ettiği dilde yanıtlar. Amaç, sosyal medyada "sonra bakarım" diye kaydedilen ve sonra bulunamayan içeriği geri getirilebilir hale getirmektir.
+It downloads content from Instagram, YouTube, TikTok, LinkedIn, Twitter/X, and general web pages, analyzes it with Gemini, indexes it as vectors, and answers the user's questions based on their own saved content (RAG), in the user's preferred language. The goal is to make content saved with an "I'll check this later" intent — and then never found again — actually retrievable.
 
-## Özellikler
+## Features
 
-- **Çoklu kaynak:** Instagram (reel, post, carousel), YouTube, TikTok, LinkedIn, Twitter/X ve genel web makaleleri
-- **Doğrudan medya yükleme:** fotoğraf, video ve sesli mesaj
-- **Multimodal analiz:** Gemini file upload API ile görsel/video/ses içeriğinden özet ve anahtar noktalar çıkarma
-- **RAG tabanlı sohbet:** Kaydedilmiş içerikler üzerinden anlamsal arama ve sohbet biçiminde yanıt
-- **Çok dilli sunum:** Analiz içeriğin kaynak dilinde yapılır, kullanıcının diline gerektiğinde çevrilir ve önbelleğe alınır
-- **Mükerrer işlem koruması:** URL kanonikleştirme ve süreç içi kilitle aynı içeriğin iki kez indirilmesi/analiz edilmesi engellenir
-- **Çoklu kanal:** Telegram (polling) ve WhatsApp (webhook) aynı işleme hattını kullanır
+- **Multi-source support:** Instagram (reels, posts, carousels), YouTube, TikTok, LinkedIn, Twitter/X, and general web articles
+- **Direct media upload:** photos, videos, and voice messages
+- **Multimodal analysis:** summaries and key points extracted from image/video/audio content via the Gemini file upload API
+- **RAG-based chat:** semantic search and conversational answers over saved content
+- **Multilingual output:** analysis is done in the content's source language, then translated into the user's language on demand and cached
+- **Duplicate-processing protection:** URL canonicalization plus an in-process lock prevent the same content from being downloaded or analyzed twice
+- **Multi-channel:** Telegram (polling) and WhatsApp (webhook) share the same processing pipeline
 
-## Mimari
+## Architecture
 
 ```mermaid
 flowchart LR
-    U[Kullanıcı] -->|link / medya| TG[Telegram Bot]
-    U -->|mesaj| WA[WhatsApp Webhook<br/>FastAPI]
-    TG --> P[İşleme Hattı]
+    U[User] -->|link / media| TG[Telegram Bot]
+    U -->|message| WA[WhatsApp Webhook<br/>FastAPI]
+    TG --> P[Processing Pipeline]
     WA --> P
-    P --> N[URL Kanonikleştirme<br/>+ URL Kilidi]
-    N --> E[Çıkarma / İndirme<br/>yt-dlp · trafilatura]
-    E --> G[Gemini Analizi]
+    P --> N[URL Canonicalization<br/>+ URL Lock]
+    N --> E[Extraction / Download<br/>yt-dlp · trafilatura]
+    E --> G[Gemini Analysis]
     G --> DB[(Supabase Postgres)]
     G --> V[(ChromaDB)]
-    U -->|soru| R[RAG Sorgusu]
+    U -->|question| R[RAG Query]
     V --> R
     DB --> R
-    R -->|kullanıcı dilinde yanıt| U
+    R -->|answer in user's language| U
 ```
 
-Tek süreçte çalışır: `python-telegram-bot` polling'i ve FastAPI sunucusu (sağlık kontrolü + WhatsApp webhook) aynı asyncio event loop'unda başlatılır.
+Runs as a single process: `python-telegram-bot` polling and a FastAPI server (health check + WhatsApp webhook) are started in the same asyncio event loop.
 
-Proje yapısı:
+Project structure:
 
 ```
-app.py                  # Bot handler'ları, webhook, çıkarma hattı, Gemini ve RAG akışı
-app/db/                 # Supabase istemcisi, repository'ler, URL kanonikleştirme
+app.py                  # Bot handlers, webhook, extraction pipeline, Gemini and RAG flow
+app/db/                 # Supabase client, repositories, URL canonicalization
 app/db/repositories/    # users, channels, contents, user_contents, jobs
-app/services/           # Medya yardımcıları (ör. içerik tipi tespiti)
-tests/                  # Birim testleri
+app/services/           # Media helpers (e.g. content type detection)
+tests/                  # Unit tests
 ```
 
-### Veri modeli
+### Data model
 
-- `contents`: Kullanıcıdan bağımsız, `canonical_url` ile tekil içerik varlığı
-- `content_analyses`: İçeriğe ait kanonik analiz (kaynak dilinde)
-- `content_translations`: Kullanıcı diline çeviri önbelleği
-- `user_contents`: Kullanıcı ile içerik arasındaki ilişki (kaydetme, yıldız, görüntülenme)
-- `users` / `channels`: Kimlik ve erişim kanalı ayrı tutulur; Telegram veya WhatsApp hesabı kullanıcı kimliği değil, bir kanaldır
-- `processing_jobs`: İşleme denemeleri ve hata kayıtları
+- `contents`: user-independent, unique content entity keyed by `canonical_url`
+- `content_analyses`: canonical analysis of the content (in its source language)
+- `content_translations`: cache of translations into the user's language
+- `user_contents`: relationship between a user and a content item (saved, starred, viewed)
+- `users` / `channels`: identity and access channel are kept separate; a Telegram or WhatsApp account is not a user identity, it's a channel
+- `processing_jobs`: processing attempts and error records
 
-Tüm tablolarda Row Level Security açıktır; backend sunucu tarafında service-role anahtarıyla çalışır.
+Row Level Security is enabled on all tables; the backend runs server-side with a service-role key.
 
-## Teknolojiler ve seçim nedenleri
+## Tech stack and rationale
 
-| Teknoloji | Neden |
+| Technology | Why |
 |---|---|
-| Python 3.11+ / asyncio | Bot, webhook ve I/O ağırlıklı indirme işleri için uygun; yt-dlp ve Gemini SDK ekosistemi Python'da |
-| python-telegram-bot v20+ | Async API'si ile FastAPI ile aynı event loop'ta çalışabiliyor |
-| FastAPI + uvicorn | Hafif sağlık kontrolü ve WhatsApp webhook uç noktası |
-| Google Gemini (`google-genai`) | Video, görsel ve sesi tek API'de analiz edebilen multimodal model; ayrı transkripsiyon/görsel modeli gerektirmiyor |
-| Supabase Postgres | Yönetilen Postgres, RLS ve pgvector desteği, ileride web/mobil auth'a geçiş imkânı |
-| ChromaDB | Yerel, kurulumsuz vektör deposu; hızlı prototipleme için |
-| yt-dlp, trafilatura | Video platformları için indirme, web sayfaları için ana metin çıkarma |
-| Docker | ffmpeg dahil tekrarlanabilir çalışma ortamı |
+| Python 3.11+ / asyncio | Fits the bot, webhook, and I/O-heavy download workload; yt-dlp and the Gemini SDK ecosystem are Python-first |
+| python-telegram-bot v20+ | Async API lets it run in the same event loop as FastAPI |
+| FastAPI + uvicorn | Lightweight health check and WhatsApp webhook endpoint |
+| Google Gemini (`google-genai`) | Multimodal model that analyzes video, image, and audio through a single API, avoiding separate transcription/vision models |
+| Supabase Postgres | Managed Postgres with RLS and pgvector support, with room to move to web/mobile auth later |
+| ChromaDB | Local, zero-setup vector store for fast prototyping |
+| yt-dlp, trafilatura | Downloading from video platforms, main-text extraction from web pages |
+| Docker | Reproducible runtime environment, including ffmpeg |
 
-## Öne çıkan teknik kararlar ve zorluklar
+## Key technical decisions and challenges
 
-**Kanonik içerik ve sunum dili ayrımı.** Analiz kullanıcıya değil içeriğe aittir. Aynı içerik farklı kullanıcılar tarafından kaydedildiğinde Gemini yalnızca bir kez çağrılır. Kullanıcının dili kaynak dilden farklıysa çeviri talep üzerine üretilir ve `content_translations` tablosunda saklanır.
+**Separating canonical content from presentation language.** Analysis belongs to the content, not the user. When the same content is saved by different users, Gemini is only called once. If a user's language differs from the source language, a translation is generated on demand and cached in `content_translations`.
 
-**URL kanonikleştirme.** Aynı içerik birçok biçimde gelebilir (`youtu.be/ID`, `/shorts/ID`, `?igsh=` ve `utm_*` parametreleri vb.). Tek bir `normalize_url` fonksiyonu hem veritabanı benzersizlik kısıtı hem de Chroma doküman kimliği (`doc_{user_id}_{sha256(url)[:24]}`) için kullanılır. Böylece tekrar gönderimler aynı kayda çözülür ve vektör indeksinde kopya oluşmaz.
+**URL canonicalization.** The same content can arrive in many forms (`youtu.be/ID`, `/shorts/ID`, `?igsh=` and `utm_*` params, etc.). A single `normalize_url` function is used both for the database uniqueness constraint and for the Chroma document ID (`doc_{user_id}_{sha256(url)[:24]}`). This resolves repeated submissions to the same record and prevents duplicates in the vector index.
 
-**İçerik yaşam döngüsü.** Her içerik `received → extracting → processing → embedding → completed` (veya `failed`) durumlarından geçer. `canonical_url` üzerindeki UNIQUE kısıtı nedeniyle başarısız bir kayıt tekrar denendiğinde yeni satır eklenmez, mevcut satır yeniden işlenir; yarım kalmış işlemler aynı `content_id` ile devam ettirilir.
+**Content lifecycle.** Each content item moves through `received → extracting → processing → embedding → completed` (or `failed`). Because of the UNIQUE constraint on `canonical_url`, retrying a failed item doesn't create a new row — it reprocesses the existing one, and partially completed work resumes under the same `content_id`.
 
-**Eşzamanlılık.** Aynı URL'ye aynı anda gelen istekler referans sayaçlı, süreç içi bir kilitle sıraya alınır; farklı URL'ler paralel çalışır. Kilit, bekleyen kalmadığında sözlükten silinir.
+**Concurrency.** Requests for the same URL arriving at the same time are queued behind a reference-counted, in-process lock; different URLs run in parallel. The lock is removed from the dictionary once nothing is waiting on it.
 
-**Boş girdiyle analiz riski.** İndirme sessizce başarısız olduğunda (medya ve açıklama boş) Gemini'ye boş girdiyle istek gitmesi, makul görünen ama alakasız bir analiz üretilmesine yol açtı. Bu durum gerçek bir kullanıcı raporuyla ortaya çıktı; şimdi hem medya hem metin boşsa analiz engelleniyor ve test ile kapsanıyor.
+**Risk of analyzing empty input.** When a download silently failed (both media and caption empty), sending an empty request to Gemini produced a plausible-looking but irrelevant analysis. This surfaced through a real user report; analysis is now blocked whenever both media and text are empty, and it's covered by a test.
 
-**RAG ve vektör depolama.** Vektörler yerel ChromaDB'de tutuluyor. Kalıcı disk olmayan ortamlarda (ör. ücretsiz PaaS katmanları) bu indeks her deploy'da sıfırlanır; kanonik analizler Supabase'de kaldığı için veri kaybolmaz, ancak indeksin yeniden kurulması gerekir. Bu bilinen bir sınırlamadır. Değerlendirilen yönler: başlangıçta indeksi Supabase'deki analizlerden yeniden inşa etmek veya zaten etkin olan pgvector'e geçip ayrı vektör servisini kaldırmak.
+**RAG and vector storage.** Vectors are kept in a local ChromaDB instance. On environments without persistent disk (e.g. free PaaS tiers), this index resets on every deploy; since canonical analyses live in Supabase, no data is lost, but the index has to be rebuilt. This is a known limitation. Options considered: rebuilding the index from Supabase analyses on startup, or moving to the already-available pgvector and dropping the separate vector service.
 
-**Platform kısıtları.** YouTube'un bot tespiti ve Cloudflare korumalı siteler bazı içeriklerin alınmasını engelleyebilir. Bunları proxy veya headless tarayıcıyla aşmaya çalışmak yerine YouTube desteği "best-effort" olarak bırakıldı; kullanıcıya net bir hata döndürülüyor. Bu, kullanım koşullarına uyum ve sürdürülebilirlik açısından bilinçli bir tercihtir.
+**Platform constraints.** YouTube's bot detection and Cloudflare-protected sites can block some content from being fetched. Rather than working around these with a proxy or a headless browser, YouTube support is treated as best-effort, and the user gets a clear error instead. This is a deliberate choice for maintainability and to stay within each platform's terms of use.
 
-**Windows geliştirme ortamı.** Geliştirme Windows'ta yapıldığı için `api.telegram.org` bağlantılarında görülen `WinError 10054` hatası IPv4 zorlanarak, event loop ise `WindowsSelectorEventLoopPolicy` ile çözüldü.
+**Windows development environment.** Since development happened on Windows, a `WinError 10054` seen on `api.telegram.org` connections was fixed by forcing IPv4, and the event loop was set to `WindowsSelectorEventLoopPolicy`.
 
-## Kurulum
+## Setup
 
-### Gereksinimler
+### Requirements
 
 - Python 3.11+
-- ffmpeg (Docker imajında hazır gelir)
-- Bir Telegram bot token'ı, Gemini API anahtarı ve Supabase projesi
-- Dışa istek için proxy hizmeti kullanılıyorsa kullanıcı adı/parolası
+- ffmpeg (included in the Docker image)
+- A Telegram bot token, a Gemini API key, and a Supabase project
+- Proxy credentials, if an outbound proxy service is used
 
-### Ortam değişkenleri
+### Environment variables
 
-Proje kökünde `.env` dosyası oluşturun (bu dosya sürüm kontrolüne eklenmemelidir):
+Create a `.env` file in the project root (this file should not be committed):
 
 ```
 TELEGRAM_BOT_TOKEN=
@@ -107,43 +107,43 @@ SUPABASE_URL=
 SUPABASE_SECRET_KEY=
 PROXY_USER=
 PROXY_PASS=
-# WhatsApp kanalı için ek WHATSAPP_* değişkenleri gerekir
+# Additional WHATSAPP_* variables are required for the WhatsApp channel
 ```
 
-`SUPABASE_SECRET_KEY` service-role anahtarıdır; yalnızca sunucuda tutulmalı, istemciye verilmemelidir.
+`SUPABASE_SECRET_KEY` is a service-role key; it should only ever live on the server, never be shipped to a client.
 
-### Yerel çalıştırma
+### Running locally
 
 ```bash
-git clone <repo-url>
-cd insta_bot
+git clone https://github.com/dev-berkdogan/second-brain-bot.git
+cd second-brain-bot
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python app.py
 ```
 
-Bot Telegram polling ile başlar; FastAPI sunucusu `PORT` değişkeninde (varsayılan 8000) çalışır.
+The bot starts with Telegram polling; the FastAPI server runs on the `PORT` variable (default 8000).
 
 ### Docker
 
 ```bash
-docker build -t insta-bot .
-docker run --env-file .env -p 8000:8000 insta-bot
+docker build -t second-brain-bot .
+docker run --env-file .env -p 8000:8000 second-brain-bot
 ```
 
-Chroma verisinin container yeniden başlatıldığında korunması için `/app/chroma_data` dizinine bir volume bağlayın:
+To persist Chroma data across container restarts, mount a volume at `/app/chroma_data`:
 
 ```bash
-docker run --env-file .env -p 8000:8000 -v chroma_data:/app/chroma_data insta-bot
+docker run --env-file .env -p 8000:8000 -v chroma_data:/app/chroma_data second-brain-bot
 ```
 
-`Procfile` aynı komutu (`python app.py`) worker süreci olarak çalıştırır; PaaS dağıtımları için kullanılabilir.
+The `Procfile` runs the same command (`python app.py`) as a worker process, for use with PaaS deployments.
 
-### Testler
+### Tests
 
 ```bash
 python -m unittest discover tests
 ```
 
-Bazı testler Supabase'e bağlanır; test için ayrı bir Supabase projesi ve `.env.test` kullanılması önerilir.
+Some tests connect to Supabase; using a separate Supabase project and a `.env.test` file for testing is recommended.
