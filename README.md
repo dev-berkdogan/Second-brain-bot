@@ -1,6 +1,6 @@
 # Second Brain Bot
 
-A bot that turns links and media sent via Telegram (and WhatsApp) into a searchable personal knowledge base.
+A Telegram bot that turns saved links and media into a searchable personal knowledge base. The codebase and data model also support a WhatsApp channel, currently unused in production.
 
 It downloads content from Instagram, YouTube, TikTok, LinkedIn, Twitter/X, and general web pages, analyzes it with Gemini, indexes it as vectors, and answers the user's questions based on their own saved content (RAG), in the user's preferred language. The goal is to make content saved with an "I'll check this later" intent — and then never found again — actually retrievable.
 
@@ -12,7 +12,7 @@ It downloads content from Instagram, YouTube, TikTok, LinkedIn, Twitter/X, and g
 - **RAG-based chat:** semantic search and conversational answers over saved content
 - **Multilingual output:** analysis is done in the content's source language, then translated into the user's language on demand and cached
 - **Duplicate-processing protection:** URL canonicalization plus an in-process lock prevent the same content from being downloaded or analyzed twice
-- **Multi-channel:** Telegram (polling) and WhatsApp (webhook) share the same processing pipeline
+- **Multi-channel by design:** Telegram (polling) is the active channel; a WhatsApp webhook uses the same processing pipeline but is not currently enabled in production
 
 ## Architecture
 
@@ -32,6 +32,8 @@ flowchart LR
     DB --> R
     R -->|answer in user's language| U
 ```
+
+The diagram above shows the full multi-channel design. In the current deployment, only the Telegram channel is live; the WhatsApp webhook exists in code and shares the same pipeline but is not wired to an active number.
 
 Runs as a single process: `python-telegram-bot` polling and a FastAPI server (health check + WhatsApp webhook) are started in the same asyncio event loop.
 
@@ -107,7 +109,7 @@ SUPABASE_URL=
 SUPABASE_SECRET_KEY=
 PROXY_USER=
 PROXY_PASS=
-# Additional WHATSAPP_* variables are required for the WhatsApp channel
+# Additional WHATSAPP_* variables are required for the WhatsApp channel (not currently active)
 ```
 
 `SUPABASE_SECRET_KEY` is a service-role key; it should only ever live on the server, never be shipped to a client.
